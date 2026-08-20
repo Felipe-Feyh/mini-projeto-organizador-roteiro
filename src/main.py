@@ -3,6 +3,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from src.agent.graph import travel_agent_graph
+from src.agent.state import AgentState, FlowStatus
 from src.config import settings
 
 app = FastAPI(
@@ -56,18 +58,88 @@ async def health_check() -> dict:
 
 @app.post("/roteiro", response_model=TravelResponse)
 async def create_itinerary(request: TravelRequest) -> TravelResponse:
-    """Endpoint principal - gera um roteiro de viagem personalizado."""
-    # Será implementado com o grafo LangGraph na próxima fase
-    raise HTTPException(status_code=501, detail="Fluxo LangGraph será implementado na próxima fase")
+    """Endpoint principal - gera um roteiro de viagem personalizado.
+
+    Executa o grafo LangGraph completo:
+    parse_input → validate → [weather || pois] → build_itinerary → format_output
+    """
+    # Preparar estado inicial
+    initial_state = AgentState(
+        destino=request.destino,
+        data_inicio=request.data_inicio,
+        data_fim=request.data_fim,
+        preferencias=request.preferencias,
+        orcamento=request.orcamento,
+        restricoes=request.restricoes,
+    )
+
+    # Executar o grafo LangGraph
+    try:
+        result = travel_agent_graph.invoke(initial_state.model_dump())
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro na execução do agente: {str(e)}",
+        )
+
+    # Verificar se o fluxo falhou
+    if result.get("status") == FlowStatus.FAILED:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "errors": result.get("errors", []),
+                "alertas": result.get("alertas", []),
+                "trace_id": result.get("trace_id", ""),
+            },
+        )
+
+    if result.get("status") == FlowStatus.BLOCKED:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Execução bloqueada - aprovação humana negada",
+                "trace_id": result.get("trace_id", ""),
+            },
+        )
+
+    # Montar resposta estruturada
+    weather = result.get("weather_data") or {}
+    if hasattr(weather, "model_dump"):
+        weather = weather.model_dump()
+
+    pois = result.get("pontos_interesse", [])
+    pois_dicts = [p.model_dump() if hasattr(p, "model_dump") else p for p in pois]
+
+    roteiro = result.get("roteiro", [])
+    roteiro_dicts = [r.model_dump() if hasattr(r, "model_dump") else r for r in roteiro]
+
+    return TravelResponse(
+        destino=result.get("destino", request.destino),
+        periodo=f"{request.data_inicio} a {request.data_fim}",
+        roteiro=roteiro_dicts,
+        clima_previsto=weather,
+        pontos_interesse=pois_dicts,
+        alertas=result.get("alertas", []),
+        trace_id=result.get("trace_id", ""),
+    )
 
 
 @app.post("/roteiro/validar")
 async def validate_request(request: TravelRequest) -> dict:
     """Endpoint para validar uma solicitação antes de processar."""
+    from datetime import datetime
+
+    try:
+        inicio = datetime.strptime(request.data_inicio, "%Y-%m-%d")
+        fim = datetime.strptime(request.data_fim, "%Y-%m-%d")
+        dias = (fim - inicio).days
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Formato de data inválido.")
+
     return {
         "valid": True,
         "destino": request.destino,
-        "dias": "cálculo será implementado",
+        "dias": dias,
     }
 
 
