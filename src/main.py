@@ -215,6 +215,45 @@ async def save_preference(user_id: str = "default", key: str = "", value: str = 
     return {"saved": True, "user_id": user_id, "key": key, "value": value}
 
 
+# --- Endpoints de Segurança ---
+
+
+@app.post("/seguranca/verificar")
+async def security_check_endpoint(request: TravelRequest) -> dict:
+    """Verifica segurança de uma entrada sem executar o fluxo."""
+    from src.security.guardrails import full_security_check
+
+    result = full_security_check(
+        destino=request.destino,
+        preferencias=request.preferencias,
+        orcamento=request.orcamento,
+        restricoes=request.restricoes,
+    )
+    return {
+        "is_safe": result.is_safe,
+        "level": result.level,
+        "reason": result.reason,
+        "blocked_patterns": result.blocked_patterns,
+    }
+
+
+@app.get("/seguranca/adversarial")
+async def run_adversarial_endpoint() -> dict:
+    """Executa cenários adversariais e retorna resultados de teste."""
+    from src.security.adversarial import run_adversarial_tests
+
+    results = run_adversarial_tests()
+    total = len(results)
+    passed = sum(1 for r in results if r["passed"])
+
+    return {
+        "total_scenarios": total,
+        "passed": passed,
+        "failed": total - passed,
+        "results": results,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
