@@ -157,28 +157,26 @@ def fetch_pois_node(state: AgentState) -> dict:
     """Node 3b: Busca pontos de interesse (executado em PARALELO com clima).
 
     Responsabilidade: Consultar POIs relevantes para o destino e preferências.
+    Utiliza a tool get_points_of_interest com validação de entrada.
     """
-    # Dados simulados - integração real na branch feature/tool-integracao
-    categorias_map = {
-        "cultura": ["Museu", "Teatro", "Centro Histórico"],
-        "gastronomia": ["Restaurante Regional", "Mercado Local", "Café Artesanal"],
-        "aventura": ["Trilha", "Parque Ecológico", "Mirante"],
-        "compras": ["Shopping", "Feira de Artesanato", "Loja de Souvenirs"],
-        "relaxamento": ["Spa", "Praia", "Parque Urbano"],
-    }
+    try:
+        from src.tools.poi_tool import get_points_of_interest
 
-    pois = []
-    for pref in state.preferencias:
-        locais = categorias_map.get(pref.lower(), ["Atração Local"])
-        for local in locais[:2]:  # Max 2 POIs por categoria
-            pois.append(
-                PointOfInterest(
-                    nome=f"{local} de {state.destino}",
-                    categoria=pref,
-                    descricao=f"{local} popular na região de {state.destino}",
-                    avaliacao=4.2,
-                )
+        pois = get_points_of_interest(
+            cidade=state.destino,
+            preferencias=state.preferencias,
+            orcamento=state.orcamento,
+        )
+    except Exception:
+        # Fallback mínimo em caso de falha da tool
+        pois = [
+            PointOfInterest(
+                nome=f"Atração Principal - {state.destino}",
+                categoria="geral",
+                descricao="Ponto turístico popular da região",
+                avaliacao=4.0,
             )
+        ]
 
     return {
         "pontos_interesse": pois,
