@@ -1,10 +1,13 @@
 """Configurações centralizadas da aplicação via variáveis de ambiente."""
 
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
     """Configurações da aplicação carregadas de variáveis de ambiente."""
+
+    model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     # LLM
     openai_api_key: str = ""
@@ -22,10 +25,6 @@ class Settings(BaseSettings):
     # Webhooks
     webhook_url: str = ""
     discord_webhook_url: str = ""
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 settings = Settings()
