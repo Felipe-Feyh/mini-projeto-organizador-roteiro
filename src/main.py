@@ -1,11 +1,21 @@
 """Ponto de entrada principal da aplicação - API FastAPI."""
 
+import time
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.agent.graph import travel_agent_graph
 from src.agent.state import AgentState, FlowStatus
 from src.config import settings
+from src.memory.checkpointer import (
+    get_context_for_request,
+    get_execution,
+    get_user_history,
+    log_interaction,
+    save_execution,
+    save_user_preference,
+)
 
 app = FastAPI(
     title="Organizador Inteligente de Roteiros de Viagem",
@@ -64,6 +74,7 @@ async def create_itinerary(request: TravelRequest) -> TravelResponse:
     parse_input → validate → [weather || pois] → build_itinerary → format_output
     """
     # Preparar estado inicial
+    start_time = time.time()
     initial_state = AgentState(
         destino=request.destino,
         data_inicio=request.data_inicio,
@@ -113,6 +124,32 @@ async def create_itinerary(request: TravelRequest) -> TravelResponse:
     roteiro = result.get("roteiro", [])
     roteiro_dicts = [r.model_dump() if hasattr(r, "model_dump") else r for r in roteiro]
 
+    trace_id = result.get("trace_id", "")
+
+    # Persistir execução na memória longa
+    try:
+        save_execution(
+            trace_id=trace_id,
+            destino=request.destino,
+            data_inicio=request.data_inicio,
+            data_fim=request.data_fim,
+            preferencias=request.preferencias,
+            orcamento=request.orcamento,
+            status="completed",
+            roteiro=roteiro_dicts,
+            alertas=result.get("alertas", []),
+        )
+        log_interaction(
+            action="criar_roteiro",
+            input_summary=f"{request.destino} ({request.data_inicio} a {request.data_fim})",
+            output_summary=f"{len(roteiro_dicts)} dias, {len(pois_dicts)} POIs",
+            success=True,
+            latency_ms=(time.time() - start_time) * 1000,
+            trace_id=trace_id,
+        )
+    except Exception:
+        pass  # Falha na persistência não deve impedir a resposta
+
     return TravelResponse(
         destino=result.get("destino", request.destino),
         periodo=f"{request.data_inicio} a {request.data_fim}",
@@ -120,7 +157,7 @@ async def create_itinerary(request: TravelRequest) -> TravelResponse:
         clima_previsto=weather,
         pontos_interesse=pois_dicts,
         alertas=result.get("alertas", []),
-        trace_id=result.get("trace_id", ""),
+        trace_id=trace_id,
     )
 
 
@@ -141,6 +178,41 @@ async def validate_request(request: TravelRequest) -> dict:
         "destino": request.destino,
         "dias": dias,
     }
+
+
+# --- Endpoints de Memória e Contexto ---
+
+
+@app.get("/memoria/historico")
+async def get_history(user_id: str = "default", limit: int = 10) -> dict:
+    """Recupera histórico de roteiros anteriores do usuário."""
+    history = get_user_history(user_id, limit)
+    return {"user_id": user_id, "total": len(history), "executions": history}
+
+
+@app.get("/memoria/contexto")
+async def get_context(user_id: str = "default") -> dict:
+    """Recupera contexto acumulado do usuário para enriquecer próximas solicitações."""
+    context = get_context_for_request(user_id)
+    return {"user_id": user_id, "context": context}
+
+
+@app.get("/memoria/execucao/{trace_id}")
+async def get_execution_by_trace(trace_id: str) -> dict:
+    """Recupera detalhes de uma execução específica pelo trace_id."""
+    execution = get_execution(trace_id)
+    if execution is None:
+        raise HTTPException(status_code=404, detail=f"Execução {trace_id} não encontrada.")
+    return execution
+
+
+@app.post("/memoria/preferencias")
+async def save_preference(user_id: str = "default", key: str = "", value: str = "") -> dict:
+    """Salva uma preferência do usuário para uso futuro."""
+    if not key or not value:
+        raise HTTPException(status_code=422, detail="key e value são obrigatórios.")
+    save_user_preference(user_id, key, value)
+    return {"saved": True, "user_id": user_id, "key": key, "value": value}
 
 
 if __name__ == "__main__":
