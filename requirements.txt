@@ -34,3 +34,9 @@ mypy>=1.10.0
 
 # Utilitários
 rich>=13.0.0
+
+# Groq (LLM gratuito)
+langchain-groq>=0.2.0
+
+# Frontend
+streamlit>=1.40.0
