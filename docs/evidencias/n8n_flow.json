@@ -1,0 +1,125 @@
+{
+  "name": "Organizador de Roteiros - Notificação",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gerar-roteiro",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/webhook/roteiro-pronto",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "destino", "value": "={{ $json.destino }}" },
+            { "name": "data_inicio", "value": "={{ $json.data_inicio }}" },
+            { "name": "data_fim", "value": "={{ $json.data_fim }}" },
+            { "name": "preferencias", "value": "={{ $json.preferencias }}" },
+            { "name": "orcamento", "value": "={{ $json.orcamento || 'moderado' }}" }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-request",
+      "name": "Chamar API Roteiro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-success",
+      "name": "Roteiro Gerado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "webhookUri": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "text": "={{ $json.notification_message }}",
+        "options": {}
+      },
+      "id": "discord-notify",
+      "name": "Notificar Discord",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 1,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "webhookUri": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "text": "❌ Falha ao gerar roteiro: {{ $json.error }}",
+        "options": {}
+      },
+      "id": "discord-error",
+      "name": "Notificar Erro",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 1,
+      "position": [1000, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "respond-webhook",
+      "name": "Responder Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [{ "node": "Chamar API Roteiro", "type": "main", "index": 0 }]
+      ]
+    },
+    "Chamar API Roteiro": {
+      "main": [
+        [{ "node": "Roteiro Gerado?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Roteiro Gerado?": {
+      "main": [
+        [{ "node": "Notificar Discord", "type": "main", "index": 0 }],
+        [{ "node": "Notificar Erro", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notificar Discord": {
+      "main": [
+        [{ "node": "Responder Webhook", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notificar Erro": {
+      "main": [
+        [{ "node": "Responder Webhook", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
