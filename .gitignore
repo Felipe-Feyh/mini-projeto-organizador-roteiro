@@ -54,3 +54,6 @@ htmlcov/
 
 # Data directory (memory database)
 data/
+
+# Logs and traces
+logs/

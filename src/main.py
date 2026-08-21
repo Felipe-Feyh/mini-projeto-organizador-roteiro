@@ -16,6 +16,13 @@ from src.memory.checkpointer import (
     save_execution,
     save_user_preference,
 )
+from src.observability.logger import ExecutionTracer, StructuredLogger
+from src.observability.tracer import (
+    get_metrics_summary,
+    list_recent_traces,
+    load_trace,
+    save_trace,
+)
 
 app = FastAPI(
     title="Organizador Inteligente de Roteiros de Viagem",
@@ -75,6 +82,8 @@ async def create_itinerary(request: TravelRequest) -> TravelResponse:
     """
     # Preparar estado inicial
     start_time = time.time()
+    tracer = ExecutionTracer(trace_id="")
+
     initial_state = AgentState(
         destino=request.destino,
         data_inicio=request.data_inicio,
@@ -86,8 +95,11 @@ async def create_itinerary(request: TravelRequest) -> TravelResponse:
 
     # Executar o grafo LangGraph
     try:
-        result = travel_agent_graph.invoke(initial_state.model_dump())
+        with tracer.start_step("graph", "invoke_langgraph"):
+            result = travel_agent_graph.invoke(initial_state.model_dump())
+        tracer.trace_id = result.get("trace_id", "unknown")
     except Exception as e:
+        tracer.record_step("graph", "invoke_langgraph", 0, "error", str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Erro na execução do agente: {str(e)}",
@@ -147,6 +159,8 @@ async def create_itinerary(request: TravelRequest) -> TravelResponse:
             latency_ms=(time.time() - start_time) * 1000,
             trace_id=trace_id,
         )
+        # Salvar trace completo
+        save_trace(trace_id, tracer.get_summary())
     except Exception:
         pass  # Falha na persistência não deve impedir a resposta
 
@@ -252,6 +266,31 @@ async def run_adversarial_endpoint() -> dict:
         "failed": total - passed,
         "results": results,
     }
+
+
+# --- Endpoints de Observabilidade ---
+
+
+@app.get("/observabilidade/traces")
+async def get_traces(limit: int = 20) -> dict:
+    """Lista traces de execuções recentes."""
+    traces = list_recent_traces(limit)
+    return {"total": len(traces), "traces": traces}
+
+
+@app.get("/observabilidade/trace/{trace_id}")
+async def get_trace_detail(trace_id: str) -> dict:
+    """Recupera trace completo de uma execução específica."""
+    trace = load_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"Trace {trace_id} não encontrado.")
+    return trace
+
+
+@app.get("/observabilidade/metricas")
+async def get_metrics() -> dict:
+    """Retorna métricas agregadas das execuções."""
+    return get_metrics_summary()
 
 
 if __name__ == "__main__":
