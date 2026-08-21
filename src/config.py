@@ -9,9 +9,16 @@ class Settings(BaseSettings):
 
     model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # LLM
+    # LLM - Groq (gratuito)
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
+
+    # LLM - OpenAI (fallback)
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+
+    # Provedor LLM ativo (groq ou openai)
+    llm_provider: str = "groq"
 
     # API de Clima
     openweather_api_key: str = ""
