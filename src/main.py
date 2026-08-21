@@ -293,6 +293,93 @@ async def get_metrics() -> dict:
     return get_metrics_summary()
 
 
+# --- Endpoints de Integração Low-Code (Webhook) ---
+
+
+@app.post("/webhook/roteiro-pronto")
+async def webhook_roteiro_pronto(request: TravelRequest) -> dict:
+    """Webhook para integração low-code (n8n/Make).
+
+    Gatilho: Recebe solicitação de roteiro via webhook.
+    Ação: Executa o fluxo completo e retorna resultado formatado
+    para ser processado pela ferramenta low-code (enviar notificação,
+    salvar relatório, etc).
+    """
+    # Executar o fluxo completo
+    start_time_wh = time.time()
+    initial_state = AgentState(
+        destino=request.destino,
+        data_inicio=request.data_inicio,
+        data_fim=request.data_fim,
+        preferencias=request.preferencias,
+        orcamento=request.orcamento,
+        restricoes=request.restricoes,
+    )
+
+    try:
+        result = travel_agent_graph.invoke(initial_state.model_dump())
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "webhook_latency_ms": round((time.time() - start_time_wh) * 1000, 2),
+        }
+
+    trace_id = result.get("trace_id", "")
+    roteiro = result.get("roteiro", [])
+    roteiro_dicts = [r.model_dump() if hasattr(r, "model_dump") else r for r in roteiro]
+
+    # Formatar resumo para notificação (Discord/Email via n8n)
+    resumo_dias = []
+    for dia in roteiro_dicts:
+        atividades = dia.get("periodo_manha", []) + dia.get("periodo_tarde", [])
+        resumo_dias.append(f"Dia {dia.get('dia', '?')}: {', '.join(atividades[:2])}")
+
+    return {
+        "success": True,
+        "trace_id": trace_id,
+        "destino": request.destino,
+        "periodo": f"{request.data_inicio} a {request.data_fim}",
+        "total_dias": len(roteiro_dicts),
+        "resumo": resumo_dias,
+        "alertas": result.get("alertas", []),
+        "webhook_latency_ms": round((time.time() - start_time_wh) * 1000, 2),
+        "notification_message": (
+            f"🗺️ Roteiro para {request.destino} pronto!\n"
+            f"📅 {request.data_inicio} a {request.data_fim} ({len(roteiro_dicts)} dias)\n"
+            f"✅ Trace: {trace_id}"
+        ),
+    }
+
+
+@app.get("/webhook/health-report")
+async def webhook_health_report() -> dict:
+    """Webhook que retorna relatório de saúde para monitoramento low-code.
+
+    Pode ser chamado periodicamente pelo n8n para verificar status
+    e enviar alerta caso haja problemas.
+    """
+    metrics = get_metrics_summary()
+
+    status = "healthy"
+    alerts = []
+
+    if metrics.get("error_rate", 0) > 20:
+        status = "degraded"
+        alerts.append(f"Taxa de erro alta: {metrics['error_rate']}%")
+
+    if metrics.get("avg_latency_ms", 0) > 5000:
+        status = "degraded"
+        alerts.append(f"Latência média elevada: {metrics['avg_latency_ms']}ms")
+
+    return {
+        "status": status,
+        "alerts": alerts,
+        "metrics": metrics,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
