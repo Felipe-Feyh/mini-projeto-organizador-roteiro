@@ -19,6 +19,10 @@ def get_llm() -> BaseChatModel | None:
     Returns:
         Instância do ChatModel ou None se nenhuma key configurada.
     """
+    # Em ambiente de teste, usa modo determinístico (sem chamadas externas)
+    if settings.app_env == "testing":
+        return None
+
     provider = settings.llm_provider.lower()
 
     if provider == "groq" and settings.groq_api_key:

@@ -88,8 +88,8 @@ class WeatherAPITimeoutError(WeatherAPIError):
     retry=retry_if_exception_type((httpx.TimeoutException, WeatherAPITimeoutError)),
     reraise=True,
 )
-async def _call_weather_api(cidade: str) -> dict:
-    """Chama a API OpenWeatherMap com retry e timeout.
+def _call_weather_api_sync(cidade: str) -> dict:
+    """Chama a API OpenWeatherMap de forma síncrona com retry e timeout.
 
     Args:
         cidade: Nome da cidade para consulta.
@@ -117,8 +117,7 @@ async def _call_weather_api(cidade: str) -> dict:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(url, params=params)
+        response = httpx.get(url, params=params, timeout=timeout)
 
         if response.status_code == 401:
             raise WeatherAPIError("API key inválida ou expirada")
@@ -261,7 +260,6 @@ def get_weather_forecast(
     Returns:
         WeatherData com a previsão (real ou fallback).
     """
-    import asyncio
     import time
 
     # 1. Validar entrada
@@ -271,36 +269,19 @@ def get_weather_forecast(
             data_inicio=data_inicio,
             data_fim=data_fim,
         )
-    except Exception as e:
+    except Exception:
         # Input inválido → fallback
         return _get_fallback_weather(cidade, data_inicio, data_fim)
 
-    # 2. Tentar chamar API real
+    # 2. Tentar chamar API real (síncrono)
     start_time = time.time()
     try:
-        # Rodar async de forma síncrona
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Já dentro de um event loop (ex: FastAPI)
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        _call_weather_api(validated_input.cidade),
-                    )
-                    raw_data = future.result(timeout=settings.app_timeout_seconds + 5)
-            else:
-                raw_data = asyncio.run(_call_weather_api(validated_input.cidade))
-        except RuntimeError:
-            raw_data = asyncio.run(_call_weather_api(validated_input.cidade))
-
+        raw_data = _call_weather_api_sync(validated_input.cidade)
         latency = (time.time() - start_time) * 1000
         weather_data = _parse_weather_response(raw_data, validated_input.cidade)
         return weather_data
 
-    except (WeatherAPIError, WeatherAPITimeoutError, Exception):
+    except (WeatherAPIError, WeatherAPITimeoutError, Exception) as e:
         # 3. Fallback
         return _get_fallback_weather(
             validated_input.cidade,
