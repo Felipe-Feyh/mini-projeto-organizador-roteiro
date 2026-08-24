@@ -198,7 +198,28 @@ def build_itinerary_node(state: AgentState) -> dict:
     """
     num_dias = _calculate_days(state.data_inicio, state.data_fim)
 
-    # Distribuir POIs pelos dias
+    # Tentar usar LLM para gerar roteiro mais inteligente
+    try:
+        from src.llm import get_llm
+
+        llm = get_llm()
+        if llm and state.pontos_interesse:
+            roteiro = _build_itinerary_with_llm(llm, state, num_dias)
+            if roteiro:
+                return {
+                    "roteiro": roteiro,
+                    "status": FlowStatus.BUILDING_ITINERARY,
+                    "messages": [
+                        AIMessage(
+                            content=f"Roteiro montado com IA: {num_dias} dias em {state.destino} "
+                            f"com {len(state.pontos_interesse)} pontos de interesse."
+                        )
+                    ],
+                }
+    except Exception:
+        pass  # Fallback para lógica determinística
+
+    # Fallback: lógica determinística
     pois = state.pontos_interesse
     roteiro = []
 
@@ -314,6 +335,92 @@ def error_node(state: AgentState) -> dict:
 
 
 # --- Funções auxiliares (determinísticas) ---
+
+
+def _build_itinerary_with_llm(llm, state: AgentState, num_dias: int) -> list[ItineraryDay] | None:
+    """Usa o LLM (Groq/OpenAI) para gerar um roteiro mais inteligente.
+
+    Args:
+        llm: Instância do LLM.
+        state: Estado atual do agente.
+        num_dias: Número de dias do roteiro.
+
+    Returns:
+        Lista de ItineraryDay ou None se falhar.
+    """
+    import json as json_module
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    # Preparar contexto para o LLM
+    pois_info = "\n".join(
+        f"- {p.nome} ({p.categoria}): {p.descricao} | Horário: {p.horario_funcionamento}"
+        for p in state.pontos_interesse
+    )
+
+    clima_info = ""
+    if state.weather_data:
+        clima_info = f"Temperatura média: {state.weather_data.temperatura_media}°C, Condição: {state.weather_data.condicao}"
+        if state.weather_data.previsao_dias:
+            clima_info += "\nPrevisão por dia:\n"
+            for prev in state.weather_data.previsao_dias[:num_dias]:
+                clima_info += f"  Dia {prev.get('dia')}: {prev.get('condicao')} ({prev.get('temp_min')}-{prev.get('temp_max')}°C)\n"
+
+    prompt = f"""Crie um roteiro de viagem para {state.destino} de {num_dias} dias.
+
+Preferências do viajante: {', '.join(state.preferencias)}
+Orçamento: {state.orcamento}
+Período: {state.data_inicio} a {state.data_fim}
+
+Clima previsto:
+{clima_info}
+
+Pontos de interesse disponíveis:
+{pois_info}
+
+Responda APENAS com um JSON array, onde cada elemento tem:
+{{"dia": 1, "periodo_manha": ["atividade1"], "periodo_tarde": ["atividade2"], "periodo_noite": ["atividade3"], "refeicoes_sugeridas": ["restaurante"], "dicas": ["dica"]}}
+
+Distribua os pontos de interesse de forma equilibrada pelos dias. Considere o clima para sugerir atividades apropriadas. Máximo 2 atividades por período."""
+
+    try:
+        response = llm.invoke([
+            SystemMessage(content="Você é um planejador de viagens. Responda APENAS com JSON válido, sem texto adicional."),
+            HumanMessage(content=prompt),
+        ])
+
+        # Extrair JSON da resposta
+        content = response.content.strip()
+        # Limpar possíveis markdown code blocks
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+            content = content.rsplit("```", 1)[0] if "```" in content else content
+
+        dias_data = json_module.loads(content)
+
+        roteiro = []
+        for i, dia_data in enumerate(dias_data[:num_dias]):
+            data_dia = _add_days(state.data_inicio, i)
+            clima_dia = ""
+            if state.weather_data and state.weather_data.previsao_dias:
+                if i < len(state.weather_data.previsao_dias):
+                    prev = state.weather_data.previsao_dias[i]
+                    clima_dia = f"{prev.get('condicao', '')} ({prev.get('temp_min', 0)}-{prev.get('temp_max', 0)}°C)"
+
+            roteiro.append(ItineraryDay(
+                dia=i + 1,
+                data=data_dia,
+                periodo_manha=dia_data.get("periodo_manha", ["Explorar a região"]),
+                periodo_tarde=dia_data.get("periodo_tarde", ["Tempo livre"]),
+                periodo_noite=dia_data.get("periodo_noite", ["Descanso"]),
+                refeicoes_sugeridas=dia_data.get("refeicoes_sugeridas", []),
+                clima_esperado=clima_dia,
+                dicas=dia_data.get("dicas", []),
+            ))
+
+        return roteiro if roteiro else None
+
+    except Exception:
+        return None
 
 
 def _calculate_days(data_inicio: str, data_fim: str) -> int:
